@@ -40,11 +40,24 @@ def chunked_cdist_topk(x, y, k, chunk_size):
             all_vals = torch.cat([best_vals, vals], dim=-1)
             all_idx = torch.cat([best_idx, idx], dim=-1)
 
-            best_vals, order = torch.topk(all_vals, k, dim=-1, largest=False)
+            kb=min(k, all_vals.shape[-1])
+            best_vals, order = torch.topk(all_vals, kb, dim=-1, largest=False)
             best_idx = torch.gather(all_idx, -1, order)
 
     return best_vals, best_idx
 
+
+def iterative_chunked_cdist_topk(x, y, k, chunk_size):
+    best_vals = None
+    for a,b in zip(x,y):
+        vals, idx = chunked_cdist_topk(a.unsqueeze(0), b.unsqueeze(0), k, chunk_size)
+        if best_vals is None:
+            best_vals = vals
+            best_idx = idx
+            continue
+        best_vals = torch.cat([best_vals, vals], dim=0)
+        best_idx = torch.cat([best_idx, idx], dim=0)
+    return best_vals, best_idx
 
 
 # ============================================================
@@ -68,7 +81,10 @@ def test_correctness():
         ref_vals, ref_idx = reference_cdist_topk(x, y, k)
 
         vals, idx = chunked_cdist_topk(x, y, k, chunk_size=7)
+        assert torch.allclose(ref_vals, vals, atol=1e-6)
+        assert torch.equal(ref_idx, idx)
 
+        vals, idx = iterative_chunked_cdist_topk(x, y, k, chunk_size=7)
         assert torch.allclose(ref_vals, vals, atol=1e-6)
         assert torch.equal(ref_idx, idx)
 
@@ -99,8 +115,9 @@ def benchmark(device="cpu"):
     """
 
     shape = (3, 2, 16000, 64)  # D1xD2xBxF with large B to stress memory
-    k = 25
-    chunk_size = 2048
+    shape = (3, 32, 32, 400, 256)  # D1xD2xBxF with large B to stress memory
+    k = 10
+    chunk_size = 50#2048
 
     print(f"\nBenchmark on {device}")
     print(f"shape={shape}, k={k}, chunk_size={chunk_size}\n")
@@ -115,7 +132,9 @@ def benchmark(device="cpu"):
 
     def time_fn(fn):
         if device == "cuda":
+            torch.cuda.empty_cache() # so that nvidia-smi "reacts"
             torch.cuda.reset_peak_memory_stats()
+            peak_mem0 = torch.cuda.max_memory_allocated() / (1<<30)
             torch.cuda.synchronize()
 
         iters = 5
@@ -126,14 +145,15 @@ def benchmark(device="cpu"):
         if device == "cuda":
             torch.cuda.synchronize()
             peak_mem = torch.cuda.max_memory_allocated() / (1<<30)
-            print(f"[MEM]: peak GPU memory: {peak_mem:.1f} GB")
+            print(f"[MEM]: peak GPU memory: {peak_mem-peak_mem0:.1f} GB")
 
         print(f"[TIME]: {(time.time() - t0) / iters:.6f}s")
 
 
     benchmarks = [
-        ("chunked version  ", lambda: chunked_cdist_topk(x, y, k, chunk_size=chunk_size)),
         ("full cdist + topk", lambda: reference_cdist_topk(x, y, k)),
+        ("chunked version  ", lambda: chunked_cdist_topk(x, y, k, chunk_size=chunk_size)),
+        ("iterative version  ", lambda: iterative_chunked_cdist_topk(x, y, k, chunk_size=chunk_size)),
     ]
 
     for name, fn in benchmarks:
