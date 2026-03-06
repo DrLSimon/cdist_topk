@@ -1,54 +1,51 @@
 import torch
+import tqdm
 from cdist_topk import chunked_cdist_topk, reference_cdist_topk, iterative_chunked_cdist_topk
-from utils import gpu_memory_tracker, timer, load_cats
+from utils import gpu_memory_tracker, timer, load_cats, make_loader, images_to_patches
 
-def images_to_patches(x: torch.Tensor, patch_size: int = 32) -> torch.Tensor:
-    """
-    Convert batch of RGB images to batch of patches.
+
+def update_topk_dists_from_batch(x, y, k, topk_dists):
+    k = min(k, y.shape[-2])
+    def extract_topk(d):
+        vals, _ = torch.topk(d, k, dim=-1, largest=False, sorted=True)
+        return vals
+
+    d = torch.cdist(x, y, compute_mode='donot_use_mm_for_euclid_dist')
+    new_dists = extract_topk(d)
+    if topk_dists is None:
+        return new_dists
+    all_dists=torch.cat([topk_dists, new_dists], dim=-1)
+    topk_dists = extract_topk(all_dists)
+    return topk_dists
+
+
+
+def concat_topk_dists(topk_dists, batch_topk_dists):
+    if topk_dists is None:
+        return batch_topk_dists
+    return torch.cat([topk_dists, batch_topk_dists], dim=-2)
+
+@timer
+@gpu_memory_tracker
+def run_on_full_dataset(all_cats, k=25, bsx=256, bsy=128):
+    all_cats_patches = images_to_patches(all_cats)
+    loaderx = make_loader(all_cats_patches, batch_dim=-2, batch_size=bsx)
+    loadery = make_loader(all_cats_patches, batch_dim=-2, batch_size=bsy)
     
-    Args:
-        x: Input tensor of shape (N, 3, H, W)
-        patch_size: Size of each patch (default: 32)
-    
-    Returns:
-        Tensor of shape (N, 3*patch_size*patch_size, H//patch_size, W//patch_size)
-        e.g. (N, 3, 512, 512) -> (N, 3072, 16, 16)
-    """
-    N, C, H, W = x.shape
-    p = patch_size
-    Ph, Pw = H // p, W // p  # number of patches: 32x32 = 1024
+    all_topk_dists = None
 
-    return (
-        x.reshape(N, C, Ph, p, Pw, p)  # (N, C, Ph, p, Pw, p)
-         .permute(1, 3, 5, 0, 2, 4)    # (3, p, p, N,  Ph, Pw)
-         .reshape(C, p, p, N, Ph*Pw)   # (3, p, p, N,  Ph*Pw)
-    )
-
-@timer
-@gpu_memory_tracker
-def cdist_topk_chunked(x):
-    chunked_cdist_topk(x, x, k=10, chunk_size=100)
-
-@timer
-@gpu_memory_tracker
-def cdist_topk_iterative(x):
-    iterative_chunked_cdist_topk(x, x, k=10, chunk_size=100)
-
-@timer
-@gpu_memory_tracker
-def cdist_topk(x):
-    reference_cdist_topk(x, x, k=10)
-
-
+    for x in tqdm.tqdm(loaderx):
+        x = x.cuda().float()/255
+        batch_topk_dists = None
+        for y in loadery:
+            y = y.cuda().float()/255
+            batch_topk_dists = update_topk_dists_from_batch(x, y, k, batch_topk_dists)
+        all_topk_dists = concat_topk_dists(all_topk_dists, batch_topk_dists)
+    torch.save(all_topk_dists, 'top25_dists.pt')
 
 def main():
-    all_cats = load_cats().bfloat16()
-    N = 600
-    some_cats = all_cats[:N]
-    cats_patches = images_to_patches(some_cats).cuda()
-    cdist_topk_iterative(cats_patches)
-    cdist_topk_chunked(cats_patches)
-    cdist_topk(cats_patches)
+    all_cats = load_cats()
+    run_on_full_dataset(all_cats, debug=True)
 
 if __name__=='__main__':
     main()

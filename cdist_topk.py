@@ -5,16 +5,28 @@ from math import prod
 # ============================================================
 # Reference implementation
 # ============================================================
-def reference_cdist_topk(x, y, k):
-    d = torch.cdist(x, y)
+def reference_cdist_topk(x, y, k, approx=True):
+    if approx == False:
+        def cdist(x,y):
+            return torch.cdist(x, y, compute_mode='donot_use_mm_for_euclid_dist')
+    else:
+        def cdist(x,y):
+            return torch.cdist(x, y)
+    d = cdist(x,y)
     return torch.topk(d, k, dim=-1, largest=False)
 
 
 # ============================================================
 # Chunked implementation
 # ============================================================
-def chunked_cdist_topk(x, y, k, chunk_size):
-    *batch_dims, B, F = x.shape
+def chunked_cdist_topk(x, y, k, chunk_size, approx=True):
+    if approx == False:
+        def cdist(x,y):
+            return torch.cdist(x, y, compute_mode='donot_use_mm_for_euclid_dist')
+    else:
+        def cdist(x,y):
+            return torch.cdist(x, y)
+    *batch_dims, B, F = y.shape
 
     best_vals = None
     best_idx = None
@@ -22,7 +34,7 @@ def chunked_cdist_topk(x, y, k, chunk_size):
     for start in range(0, B, chunk_size):
         end = min(start + chunk_size, B)
 
-        d_chunk = torch.cdist(x, y[..., start:end, :])  # (..., B, chunk)
+        d_chunk = cdist(x, y[..., start:end, :])  # (..., B, chunk)
 
         vals, idx = torch.topk(
             d_chunk,
@@ -47,10 +59,10 @@ def chunked_cdist_topk(x, y, k, chunk_size):
     return best_vals, best_idx
 
 
-def iterative_chunked_cdist_topk(x, y, k, chunk_size):
+def iterative_chunked_cdist_topk(x, y, k, chunk_size, approx=True):
     best_vals = None
     for a,b in zip(x,y):
-        vals, idx = chunked_cdist_topk(a.unsqueeze(0), b.unsqueeze(0), k, chunk_size)
+        vals, idx = chunked_cdist_topk(a.unsqueeze(0), b.unsqueeze(0), k, chunk_size, approx)
         if best_vals is None:
             best_vals = vals
             best_idx = idx
@@ -76,9 +88,11 @@ def test_correctness():
 
     for shape in shapes:
         x = torch.randn(*shape)
-        y = torch.randn(*shape)
+        shapey = list(shape)
+        shapey[-2]+=2 #! bug when I use a differnt size for y the test fail
+        y = torch.randn(*shapey)
 
-        ref_vals, ref_idx = reference_cdist_topk(x, y, k)
+        ref_vals, ref_idx = reference_cdist_topk(x, y, k, approx=False)
 
         vals, idx = chunked_cdist_topk(x, y, k, chunk_size=7)
         assert torch.allclose(ref_vals, vals, atol=1e-6)
@@ -95,11 +109,11 @@ def estimate_memory_footprint(x, y, chunk_size, k):
     dtype_size = x.element_size()
     *Ds, Bx, F = x.shape
     *Ds, By, F = y.shape
-    batch = prod(Ds)
+    batch_numel = prod(Ds)
 
 
-    full_mem = batch * Bx * By * dtype_size / (1<<30)
-    chunk_mem = batch * Bx * (2*chunk_size+k) * dtype_size / (1<<30)
+    full_mem = batch_numel * Bx * By * dtype_size / (1<<30)
+    chunk_mem = batch_numel * Bx * (2*chunk_size+k) * dtype_size / (1<<30)
     return full_mem, chunk_mem
 
 
