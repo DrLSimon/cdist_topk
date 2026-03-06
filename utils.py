@@ -59,8 +59,8 @@ def images_to_patches(x: torch.Tensor, patch_size: int = 32) -> torch.Tensor:
 
     return (
         x.reshape(N, C, Ph, p, Pw, p)  # (N, C, Ph, p, Pw, p)
-         .permute(3, 5, 1, 0, 2, 4)    # (p, p, 3, N,  Ph, Pw)
-         .reshape(p*p, C,  N, Ph*Pw)   # (p*p, 3, N,  Ph*Pw)
+         .permute(3, 5, 0, 1, 2, 4)    # (p, p, N,  C, Ph, Pw)
+         .reshape(p, p, N, -1)         # (p, p, N,  C * Ph * Pw)
     )
 
 from torch.utils.data import DataLoader
