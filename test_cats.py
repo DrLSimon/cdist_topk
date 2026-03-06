@@ -51,7 +51,7 @@ def test_correctness(all_cats):
     some_cats = all_cats[:100]
     some_cats_patches = images_to_patches(some_cats).cuda().float()/255
     ref_dists = raw_topk_dists(some_cats_patches, some_cats_patches, k=25)
-    topk_dists =  run_on_full_dataset(some_cats)
+    topk_dists =  run_on_full_dataset(some_cats, k=25, bsx=7, bsy=9)
     assert torch.allclose(ref_dists, topk_dists, atol=1e-6)
     print("✓ correctness tests passed")
 
