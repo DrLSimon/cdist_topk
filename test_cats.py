@@ -30,8 +30,8 @@ def concat_topk_dists(topk_dists, batch_topk_dists):
         return batch_topk_dists
     return torch.cat([topk_dists, batch_topk_dists], dim=-2)
 
-def run_on_full_dataset(all_cats, k=25, bsx=256, bsy=128):
-    all_cats_patches = images_to_patches(all_cats)
+def run_on_full_dataset(all_cats, k=25, patch_size=32, bsx=256, bsy=128):
+    all_cats_patches = images_to_patches(all_cats, patch_size=patch_size)
     loaderx = make_loader(all_cats_patches, batch_dim=-2, batch_size=bsx)
     loadery = make_loader(all_cats_patches, batch_dim=-2, batch_size=bsy)
     
@@ -47,11 +47,11 @@ def run_on_full_dataset(all_cats, k=25, bsx=256, bsy=128):
     return all_topk_dists
 
 
-def test_correctness(all_cats):
+def test_correctness(all_cats, patch_size=32):
     some_cats = all_cats[:100]
-    some_cats_patches = images_to_patches(some_cats).cuda().float()/255
+    some_cats_patches = images_to_patches(some_cats, patch_size).cuda().float()/255
     ref_dists = raw_topk_dists(some_cats_patches, some_cats_patches, k=25)
-    topk_dists =  run_on_full_dataset(some_cats, k=25, bsx=7, bsy=9)
+    topk_dists =  run_on_full_dataset(some_cats, k=25, patch_size=patch_size, bsx=7, bsy=9)
     assert torch.allclose(ref_dists, topk_dists, atol=1e-6)
     print("✓ correctness tests passed")
 
