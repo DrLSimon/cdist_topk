@@ -40,8 +40,10 @@ def sample_patches(dimensions, patch_size, nb_channels, n_samples=1):
             basis = bases[(i, j)]                                   # (full_dim, d)
             sigma = 1.0 / torch.sqrt(torch.arange(1, d + 1, dtype=torch.float32))
             z     = torch.randn(n_samples, d) * sigma               # (n_samples, d)
-            noise_scale = sigma[-1].item() * 1e-3                   # relative to weakest signal dir
-            noise = noise_scale * torch.randn(n_samples, full_dim)
+            # scale noise well below the expected nn distance on the manifold:
+            # typical nn dist ~ sigma_1 / n_samples^(1/d), so noise << that
+            nn_dist_scale = sigma[0].item() / (n_samples ** (1.0 / d))
+            noise = nn_dist_scale * 1e-2 * torch.randn(n_samples, full_dim)
             out[i, j, :, :] = z @ basis.T + noise
 
     return out  # (nb_h, nb_w, n_samples, full_dim)
@@ -52,7 +54,7 @@ from dimension import compute_mle, compute_mle_averaged_over_k, patch_topk_dists
 
 # ── PCA utils ────────────────────────────────────────────────────────────────
 
-def pca_effective_dim(samples: np.ndarray, threshold: float = 0.95):
+def pca_effective_dim(samples: np.ndarray, threshold: float = 0.999):
     """
     samples: (n_samples, full_dim)
     Returns (effective_dim, singular_values).
@@ -63,7 +65,7 @@ def pca_effective_dim(samples: np.ndarray, threshold: float = 0.95):
     return int(np.searchsorted(np.cumsum(var_ratio), threshold)) + 1, sv
 
 
-def compute_pca_dims(samples: torch.Tensor, threshold: float = 0.95):
+def compute_pca_dims(samples: torch.Tensor, threshold: float = 0.999):
     """
     Compute PCA effective dimensionality for every patch position.
 
@@ -127,7 +129,7 @@ def plot_submanifold_test(patch_size=8, nb_channels=1, n_samples=25000, k_mle=10
     full_dim = nb_channels * patch_size * patch_size
     nb_h, nb_w = dims.shape
 
-    threshold = 0.9999
+    threshold = 0.999
 
     samples = sample_patches(dims, patch_size, nb_channels, n_samples=n_samples)
 
