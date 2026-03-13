@@ -63,6 +63,49 @@ def images_to_patches(x: torch.Tensor, patch_size: int = 32) -> torch.Tensor:
          .reshape(Ph, Pw, N, -1)       # (Ph, Pw, N,  C * p * p)
     )
 
+def patches_to_images(patches: torch.Tensor, patch_size: int = 32) -> torch.Tensor:
+    """(Ph, Pw, N, C*p*p) -> (N, C, H, W) — exact inverse of images_to_patches."""
+    Ph, Pw, N, Cpp = patches.shape
+    p = patch_size
+    C = Cpp // (p * p)
+    return (
+        patches.reshape(Ph, Pw, N, C, p, p)   # (Ph, Pw, N, C, p, p)
+               .permute(2, 3, 0, 4, 1, 5)     # (N, C, Ph, p, Pw, p)
+               .reshape(N, C, Ph * p, Pw * p)  # (N, C, H, W)
+    )
+
+def test_patch_vs_image(patch_size=8, nb_channels=3, img_size=32, n_images=5):
+    # ── round-trip: image -> patches -> image ────────────────────────────────
+    x = torch.randn(n_images, nb_channels, img_size, img_size)
+    patches     = images_to_patches(x, patch_size)
+    x_recovered = patches_to_images(patches, patch_size)
+
+    Ph, Pw = img_size // patch_size, img_size // patch_size
+    assert patches.shape == (Ph, Pw, n_images, nb_channels * patch_size * patch_size), \
+        f"images_to_patches shape mismatch: {patches.shape}"
+    assert x_recovered.shape == x.shape, \
+        f"patches_to_images shape mismatch: {x_recovered.shape}"
+    assert torch.allclose(x, x_recovered), \
+        f"Round-trip image->patches->image failed, max error: {(x - x_recovered).abs().max():.2e}"
+
+    # ── round-trip: patches -> image -> patches ───────────────────────────────
+    p = torch.randn(Ph, Pw, n_images, nb_channels * patch_size * patch_size)
+    p_recovered = images_to_patches(patches_to_images(p, patch_size), patch_size)
+
+    assert p_recovered.shape == p.shape, \
+        f"images_to_patches shape mismatch on reverse round-trip: {p_recovered.shape}"
+    assert torch.allclose(p, p_recovered), \
+        f"Round-trip patches->image->patches failed, max error: {(p - p_recovered).abs().max():.2e}"
+
+    print(f"test_patch_vs_image passed  |  "
+          f"img ({n_images}, {nb_channels}, {img_size}, {img_size})  "
+          f"patch_size={patch_size}  patches ({Ph}, {Pw}, {n_images}, {nb_channels * patch_size**2})")
+
+
+if __name__ == "__main__":
+    test_patch_vs_image(patch_size=8, nb_channels=3, img_size=32, n_images=5)
+
+
 from torch.utils.data import DataLoader
 def make_loader(x: torch.Tensor, batch_dim: int=-2, **kwargs) -> DataLoader:
     batch_dim = batch_dim % x.ndim
@@ -88,7 +131,6 @@ def masked_mean(tensor, dim=None, axis=None):
     mask = torch.isnan(tensor) | torch.isinf(tensor)
     return tensor.masked_fill(mask, 0).sum(dim=dim) / (~mask).sum(dim=dim).float()
 
-
 def compute_mle(dists, k=10, fixnan=False):
     assert torch.all(dists>=0), 'Beware some dists are negative'
     k = min(dists.shape[-1], k)
@@ -113,4 +155,3 @@ def compute_mle_averaged_over_k(dists, kmin=None, kmax=None, fixnan=False):
 
     avg_est = 1/(sum(inv_est(k) for k in range(kmin, kmax))/(kmax-kmin))
     return avg_est
-
