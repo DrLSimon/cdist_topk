@@ -13,7 +13,7 @@ def _random_orthonormal_basis(full_dim: int, d: int) -> torch.Tensor:
 def _nn_noise(n_samples: int, full_dim: int, d: int, sigma_1: float) -> torch.Tensor:
     """
     Isotropic noise scaled well below the expected nearest-neighbour distance
-    on the manifold: ε ~ sigma_1 / n^(1/d) * 1e-2
+    on the manifold: eps ~ sigma_1 / n^(1/d) * 1e-2
     """
     nn_dist_scale = sigma_1 / (n_samples ** (1.0 / d))
     return nn_dist_scale * 1e-2 * torch.randn(n_samples, full_dim)
@@ -24,83 +24,233 @@ def _spectral_sigma(d: int) -> torch.Tensor:
     return 1.0 / torch.sqrt(torch.arange(1, d + 1, dtype=torch.float32))
 
 
-def _embed(coords: torch.Tensor, full_dim: int, d: int, noise_sigma: float = 1.0) -> torch.Tensor:
+def _embed(coords: torch.Tensor, full_dim: int, d: int, sigma_1: float = 1.0) -> torch.Tensor:
     """Project (n_samples, embed_dim) coords into R^full_dim via a random orthonormal basis."""
     n_samples, embed_dim = coords.shape
     basis = _random_orthonormal_basis(full_dim, embed_dim)
-    noise = _nn_noise(n_samples, full_dim, d, noise_sigma)
+    noise = _nn_noise(n_samples, full_dim, d, sigma_1)
     return coords @ basis.T + noise
 
 
-# ── registry ──────────────────────────────────────────────────────────────────
+# ── density registry ──────────────────────────────────────────────────────────
+# A density samples latent coordinates z of shape (n_samples, latent_dim).
+# latent_dim is manifold-dependent and passed by the manifold at call time.
+#
+# Signature: density_fn(n_samples: int, latent_dim: int) -> Tensor (n_samples, latent_dim)
 
+DENSITIES = {}
+
+def register_density(name: str):
+    def decorator(fn):
+        DENSITIES[name] = fn
+        return fn
+    return decorator
+
+
+@register_density("gaussian")
+def density_gaussian(n_samples: int, latent_dim: int) -> torch.Tensor:
+    """Isotropic standard Gaussian in R^latent_dim."""
+    return torch.randn(n_samples, latent_dim)
+
+
+@register_density("gaussian_spectral")
+def density_gaussian_spectral(n_samples: int, latent_dim: int) -> torch.Tensor:
+    """Gaussian with spectrally decaying variance: sigma_k = 1/sqrt(k)."""
+    sigma = _spectral_sigma(latent_dim)
+    return torch.randn(n_samples, latent_dim) * sigma
+
+
+@register_density("uniform")
+def density_uniform(n_samples: int, latent_dim: int) -> torch.Tensor:
+    """Uniform in [0, 1]^latent_dim."""
+    return torch.rand(n_samples, latent_dim)
+
+
+@register_density("laplace")
+def density_laplace(n_samples: int, latent_dim: int) -> torch.Tensor:
+    """Isotropic Laplace(0, 1) in R^latent_dim."""
+    return torch.distributions.Laplace(0.0, 1.0).sample((n_samples, latent_dim))
+
+
+@register_density("mixture_gaussian")
+def density_mixture_gaussian(n_samples: int, latent_dim: int, n_components: int = 4) -> torch.Tensor:
+    """
+    Mixture of n_components isotropic Gaussians with random centres in [-2, 2]^latent_dim.
+    Centres are redrawn each call, giving a different mixture per patch.
+    """
+    centres = 4 * torch.rand(n_components, latent_dim) - 2      # (K, d)
+    idx     = torch.randint(n_components, (n_samples,))          # (N,)
+    return centres[idx] + 0.3 * torch.randn(n_samples, latent_dim)
+
+
+# ── manifold registry ─────────────────────────────────────────────────────────
+# A manifold maps latent coords z (n_samples, latent_dim) -> ambient coords
+# (n_samples, embed_dim), where embed_dim <= full_dim.
+# It also returns sigma_1: a characteristic scale for noise.
+#
+# Signature: manifold_fn(z, d, full_dim) -> (coords, sigma_1)
+
+MANIFOLDS = {}
+
+def register_manifold(name: str, default_density: str):
+    """
+    Register a manifold with its recommended default density.
+    The default_density is used when the user does not specify one.
+    """
+    def decorator(fn):
+        MANIFOLDS[name] = {"fn": fn, "default_density": default_density}
+        return fn
+    return decorator
+
+
+@register_manifold("linear", default_density="gaussian_spectral")
+def manifold_linear(z: torch.Tensor, d: int, full_dim: int):
+    """
+    Linear submanifold: z is used directly as latent coords.
+    latent_dim = d, embed_dim = d.
+    """
+    basis  = _random_orthonormal_basis(full_dim, d)
+    coords = z                                                    # (n_samples, d)
+    return coords @ basis.T, z.std().item() or 1.0
+
+
+@register_manifold("sphere", default_density="gaussian")
+def manifold_sphere(z: torch.Tensor, d: int, full_dim: int):
+    """
+    S^d: normalise z ~ R^(d+1) to unit sphere.
+    latent_dim = d+1, embed_dim = min(d+1, full_dim).
+    """
+    z_norm = z / z.norm(dim=-1, keepdim=True)
+    embed_dim = min(z.shape[-1], full_dim)
+    return z_norm[:, :embed_dim], 1.0
+
+
+@register_manifold("torus", default_density="uniform")
+def manifold_torus(z: torch.Tensor, d: int, full_dim: int):
+    """
+    (S^1)^d: interpret z in [0,1]^d as angles theta = 2*pi*z.
+    latent_dim = d, embed_dim = min(2*d, full_dim).
+    """
+    thetas = 2 * math.pi * z                                     # (n_samples, d)
+    coords = torch.stack([thetas.cos(), thetas.sin()], dim=-1).reshape(z.shape[0], 2 * d)
+    embed_dim = min(2 * d, full_dim)
+    return coords[:, :embed_dim], 1.0
+
+
+@register_manifold("swiss_roll", default_density="uniform")
+def manifold_swiss_roll(z: torch.Tensor, d: int, full_dim: int):
+    """
+    Swiss roll x R^(d-2): z[:,0] -> t (rescaled to [1.5pi, 4.5pi]),
+    z[:,1:] -> extra linear dims for d>2.
+    latent_dim = d, embed_dim = min(d, full_dim).
+    """
+    t = (1.5 + 3.0 * z[:, 0]) * math.pi                         # (n_samples,)
+    roll = torch.stack([t * t.cos(), t * t.sin()], dim=-1)       # (n_samples, 2)
+    if d == 1:
+        coords = t.unsqueeze(-1)
+    elif d == 2:
+        coords = roll
+    else:
+        coords = torch.cat([roll, z[:, 1:d - 1]], dim=-1)        # (n_samples, d)
+    embed_dim = min(coords.shape[-1], full_dim)
+    return coords[:, :embed_dim], 1.0
+
+
+@register_manifold("poly", default_density="uniform")
+def manifold_poly(z: torch.Tensor, d: int, full_dim: int, degree: int = 3):
+    """
+    Veronese polynomial embedding: each dim of z is lifted to (z, z^2, ..., z^degree).
+    latent_dim = d, embed_dim = min(d*degree, full_dim).
+    """
+    t = 2 * z - 1                                                # rescale [0,1]^d -> [-1,1]^d
+    powers = torch.cat([t ** k for k in range(1, degree + 1)], dim=-1)
+    embed_dim = min(d * degree, full_dim)
+    return powers[:, :embed_dim], 1.0
+
+
+@register_manifold("product_spheres", default_density="gaussian")
+def manifold_product_spheres(z: torch.Tensor, d: int, full_dim: int):
+    """
+    (S^1)^d via pair-wise normalisation: split z into d pairs, normalise each.
+    latent_dim = 2*d, embed_dim = min(2*d, full_dim).
+    """
+    n_samples = z.shape[0]
+    pairs  = z.reshape(n_samples, d, 2)
+    pairs  = pairs / pairs.norm(dim=-1, keepdim=True)            # normalise each pair -> S^1
+    coords = pairs.reshape(n_samples, 2 * d)
+    embed_dim = min(2 * d, full_dim)
+    return coords[:, :embed_dim], 1.0
+
+
+# ── combined sampler ──────────────────────────────────────────────────────────
+
+# Legacy flat registry for backwards compatibility with --distrib
 DISTRIBUTIONS = {}
 
-def register(name):
+def register(name: str, density: str = None):
+    """
+    Register a combined (manifold, density) pair under a single name.
+    If density is None, uses the manifold's default density.
+    """
     def decorator(fn):
         DISTRIBUTIONS[name] = fn
         return fn
     return decorator
 
 
-# ── linear manifold ───────────────────────────────────────────────────────────
+def _sample_one(d: int, full_dim: int, n_samples: int,
+                manifold: str, density: str) -> torch.Tensor:
+    """Sample n_samples points from the given manifold/density combination."""
+    m_entry   = MANIFOLDS[manifold]
+    manifold_fn = m_entry["fn"]
+    density_fn  = DENSITIES[density or m_entry["default_density"]]
 
-@register("linear")
-def sample_linear(d: int, full_dim: int, n_samples: int) -> torch.Tensor:
-    """
-    d-dim linear submanifold via random orthonormal basis and spectrally
-    decaying Gaussian latent coordinates. Intrinsic dim = d.
-    """
-    basis = _random_orthonormal_basis(full_dim, d)
-    sigma = _spectral_sigma(d)
-    z     = torch.randn(n_samples, d) * sigma
-    noise = _nn_noise(n_samples, full_dim, d, sigma[0].item())
-    return z @ basis.T + noise
+    # Determine latent_dim from manifold
+    latent_dims = {
+        "linear":          d,
+        "sphere":          min(d + 1, full_dim),
+        "torus":           d,
+        "swiss_roll":      max(d, 1),
+        "poly":            d,
+        "product_spheres": 2 * d,
+    }
+    latent_dim = latent_dims[manifold]
 
-
-# ── sphere ────────────────────────────────────────────────────────────────────
-
-@register("sphere")
-def sample_sphere(d: int, full_dim: int, n_samples: int) -> torch.Tensor:
-    """
-    Uniform samples on S^d (the d-sphere), which is a d-dim manifold embedded
-    in R^(d+1), then projected into R^full_dim. Intrinsic dim = d.
-    If d+1 > full_dim, clamps to S^(full_dim-1).
-    """
-    embed_dim = min(d + 1, full_dim)
-    z = torch.randn(n_samples, embed_dim)
-    z = z / z.norm(dim=-1, keepdim=True)
-    return _embed(z, full_dim, d)
+    z              = density_fn(n_samples, latent_dim)            # (n_samples, latent_dim)
+    coords, sigma1 = manifold_fn(z, d, full_dim)                  # (n_samples, embed_dim)
+    noise          = _nn_noise(n_samples, full_dim, d, sigma1)
+    basis          = _random_orthonormal_basis(full_dim, coords.shape[-1])
+    return coords @ basis.T + noise                               # (n_samples, full_dim)
 
 
-# ── torus (product of circles) ────────────────────────────────────────────────
+# ── public API ────────────────────────────────────────────────────────────────
 
-@register("torus")
-def sample_torus(d: int, full_dim: int, n_samples: int) -> torch.Tensor:
-    """
-    d-dim manifold as a product of d circles: (S^1)^d embedded in R^(2d)
-    then projected into R^full_dim. Each S^1 factor contributes 2 coords
-    (cos θ_k, sin θ_k). If 2*d > full_dim the embedding is clamped to full_dim
-    columns, which still captures the d-dim structure.
-    """
-    thetas = 2 * math.pi * torch.rand(n_samples, d)
-    coords = torch.stack([thetas.cos(), thetas.sin()], dim=-1).reshape(n_samples, 2 * d)
-    embed_dim = min(2 * d, full_dim)
-    return _embed(coords[:, :embed_dim], full_dim, d)
+def list_manifolds() -> list:
+    """Return the names of all registered manifolds."""
+    return list(MANIFOLDS.keys())
+
+
+def list_densities() -> list:
+    """Return the names of all registered densities."""
+    return list(DENSITIES.keys())
 
 
 def list_distributions() -> list:
-    """Return the names of all registered distributions."""
-    return list(DISTRIBUTIONS.keys())
+    """Return all valid (manifold, density) combinations as 'manifold:density' strings,
+    plus bare manifold names which use the default density."""
+    return list_manifolds()
 
-
-# ── patch grid sampler ────────────────────────────────────────────────────────
 
 def sample_patches(dimensions: torch.Tensor, patch_size: int, nb_channels: int,
-                   n_samples: int = 1, distrib: str = "linear") -> torch.Tensor:
+                   n_samples: int = 1, manifold: str = "linear",
+                   density: str = None) -> torch.Tensor:
     """
-    Sample n_samples realisations of the patch grid using the given distribution.
+    Sample n_samples realisations of the patch grid.
     Returns (Ph, Pw, N, C*p*p) — same convention as images_to_patches.
+
+    Args:
+        manifold: one of list_manifolds()
+        density:  one of list_densities(), or None to use the manifold's default
     """
     nb_h, nb_w = dimensions.shape
     full_dim = nb_channels * patch_size * patch_size
@@ -110,69 +260,15 @@ def sample_patches(dimensions: torch.Tensor, patch_size: int, nb_channels: int,
     assert dimensions.max().item() <= full_dim, \
         f"Max intrinsic dim {dimensions.max().item()} exceeds full_dim={full_dim} " \
         f"(patch_size={patch_size}, nb_channels={nb_channels})"
-    assert distrib in DISTRIBUTIONS, \
-        f"Unknown distribution '{distrib}'. Available: {list(DISTRIBUTIONS.keys())}"
+    assert manifold in MANIFOLDS, \
+        f"Unknown manifold '{manifold}'. Available: {list_manifolds()}"
+    assert density is None or density in DENSITIES, \
+        f"Unknown density '{density}'. Available: {list_densities()}"
 
-    sample_fn = DISTRIBUTIONS[distrib]
     out = torch.zeros(nb_h, nb_w, n_samples, full_dim)
-
     for i in range(nb_h):
         for j in range(nb_w):
             d = max(1, min(int(dimensions[i, j].item()), full_dim))
-            out[i, j] = sample_fn(d, full_dim, n_samples)
+            out[i, j] = _sample_one(d, full_dim, n_samples, manifold, density)
 
     return out  # (Ph, Pw, N, C*p*p)
-# ── swiss roll ────────────────────────────────────────────────────────────────
-
-@register("swiss_roll")
-def sample_swiss_roll(d: int, full_dim: int, n_samples: int) -> torch.Tensor:
-    """
-    d-dim manifold as a cartesian product of a 2D swiss roll and a (d-2)-dim
-    linear subspace. Intrinsic dim = d. Coords clamped to full_dim if needed.
-
-    For d=1: 1D spiral arc.
-    For d=2: classic swiss roll.
-    For d>2: swiss roll × R^(d-2).
-    """
-    t    = (1.5 + 3.0 * torch.rand(n_samples)) * math.pi
-    roll = torch.stack([t * t.cos(), t * t.sin()], dim=-1)   # (n_samples, 2)
-
-    if d == 1:
-        coords = t.unsqueeze(-1)                              # (n_samples, 1)
-    elif d == 2:
-        coords = roll                                         # (n_samples, 2)
-    else:
-        extra  = torch.randn(n_samples, d - 2)               # (n_samples, d-2)
-        coords = torch.cat([roll, extra], dim=-1)             # (n_samples, d)
-
-    embed_dim = min(coords.shape[-1], full_dim)
-    return _embed(coords[:, :embed_dim], full_dim, d)
-
-
-# ── polynomial curve / surface ────────────────────────────────────────────────
-
-@register("poly")
-def sample_poly(d: int, full_dim: int, n_samples: int, degree: int = 3) -> torch.Tensor:
-    """
-    d-dim nonlinear manifold via a degree-`degree` Veronese-style embedding:
-    each of the d input dims is lifted to (t, t^2, ..., t^degree), giving
-    embed_dim = d*degree (clamped to full_dim if needed). Intrinsic dim = d.
-    """
-    t      = 2 * torch.rand(n_samples, d) - 1
-    powers = torch.cat([t ** k for k in range(1, degree + 1)], dim=-1)  # (n_samples, d*degree)
-    embed_dim = min(d * degree, full_dim)
-    return _embed(powers[:, :embed_dim], full_dim, d)
-
-
-# ── product of spheres ────────────────────────────────────────────────────────
-
-@register("product_spheres")
-def sample_product_spheres(d: int, full_dim: int, n_samples: int) -> torch.Tensor:
-    """
-    d-dim manifold as (S^1)^d embedded in R^(2d) then projected to R^full_dim.
-    If 2*d > full_dim the embedding is clamped to full_dim columns.
-    """
-    thetas = 2 * math.pi * torch.rand(n_samples, d)
-    coords = torch.stack([thetas.cos(), thetas.sin()], dim=-1).reshape(n_samples, 2 * d)
-    embed_dim = min(2 * d, full_dim)
-    return _embed(coords[:, :embed_dim], full_dim, d)

@@ -6,7 +6,7 @@ import matplotlib.gridspec as gridspec
 
 
 from dimension import compute_mle, compute_mle_averaged_over_k, patch_topk_dists
-from toy_distribs import sample_patches, list_distributions
+from toy_distribs import sample_patches, list_manifolds, list_densities
 
 
 # ── PCA utils ────────────────────────────────────────────────────────────────
@@ -74,7 +74,8 @@ def compute_mle_dims(samples: torch.Tensor, k: int = 10, n_anchors: int = 1000):
 
 
 
-def plot_submanifold_test(patch_size=8, nb_channels=1, n_samples=25000, k_mle=10, n_anchors=1000, distrib="linear"):
+def plot_submanifold_test(patch_size=8, nb_channels=1, n_samples=25000, k_mle=10,
+                          n_anchors=1000, manifold="linear", density=None):
     # max dim = 64 <= full_dim = 8*8*1 = 64 ✓
     dims = torch.tensor([
         [1,  2,  4,  8],
@@ -88,7 +89,8 @@ def plot_submanifold_test(patch_size=8, nb_channels=1, n_samples=25000, k_mle=10
 
     threshold = 0.999
 
-    samples = sample_patches(dims, patch_size, nb_channels, n_samples=n_samples, distrib=distrib)
+    samples = sample_patches(dims, patch_size, nb_channels, n_samples=n_samples,
+                              manifold=manifold, density=density)
 
     pca_dims, spectra          = compute_pca_dims(samples, threshold=threshold)
     mle_dims, mle_avg_dims     = compute_mle_dims(samples, k=k_mle, n_anchors=n_anchors)
@@ -99,6 +101,8 @@ def plot_submanifold_test(patch_size=8, nb_channels=1, n_samples=25000, k_mle=10
     fig = plt.figure(figsize=(18, 14))
     gs  = gridspec.GridSpec(3, 3, figure=fig, hspace=0.5, wspace=0.35)
 
+    distrib_label = f"{manifold}:{density or 'default'}"
+
     # row 0: heatmaps
     _plot_heatmap(fig.add_subplot(gs[0, 0]), dims.cpu().numpy(),    "Target intrinsic dim",           dims)
     _plot_heatmap(fig.add_subplot(gs[0, 1]), pca_dims,        f"PCA-estimated dim ({threshold:.0%} var)",    dims)
@@ -108,8 +112,8 @@ def plot_submanifold_test(patch_size=8, nb_channels=1, n_samples=25000, k_mle=10
     _plot_heatmap(fig.add_subplot(gs[1, 0]), mle_avg_dims_np, f"MLE avg dim (k=3..{k_mle})",   dims)
     _plot_scatter_multi(fig.add_subplot(gs[1, 1]), target, {
         f"PCA ({threshold:.0%})":         pca_dims.flatten(),
-        f"MLE k={k_mle}":         mle_dims_np.flatten(),
-        f"MLE avg k=3..{k_mle}":  mle_avg_dims_np.flatten(),
+        f"MLE k={k_mle}":                 mle_dims_np.flatten(),
+        f"MLE avg k=3..{k_mle}":          mle_avg_dims_np.flatten(),
     })
     _plot_spectra(fig.add_subplot(gs[1, 2]), spectra, dims, nb_h, nb_w)
 
@@ -119,7 +123,7 @@ def plot_submanifold_test(patch_size=8, nb_channels=1, n_samples=25000, k_mle=10
     _plot_residuals(fig.add_subplot(gs[2, 2]), target, mle_avg_dims_np.flatten(), f"MLE avg residuals")
 
     fig.suptitle(
-        f"Submanifold patch test  |  distrib={distrib}  patch_size={patch_size}  nb_channels={nb_channels}  "
+        f"Submanifold patch test  |  distrib={distrib_label}  patch_size={patch_size}  nb_channels={nb_channels}  "
         f"full_dim={full_dim}  n_samples={n_samples}  n_anchors={n_anchors}  pca_threshold={threshold:.0%}  k_mle={k_mle}",
         fontsize=12,
     )
@@ -203,18 +207,22 @@ def _plot_residuals(ax, target, estimated, title="Residuals"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Submanifold patch dimensionality test")
-    parser.add_argument("--distrib",    type=str,   default="linear",
-                        choices=list_distributions(),
-                        help="Toy distribution to sample patches from")
-    parser.add_argument("--patch_size", type=int,   default=8)
-    parser.add_argument("--nb_channels",type=int,   default=1)
-    parser.add_argument("--n_samples",  type=int,   default=25000)
-    parser.add_argument("--n_anchors",  type=int,   default=1000)
-    parser.add_argument("--k_mle",      type=int,   default=10)
+    parser.add_argument("--manifold",    type=str,   default="linear",
+                        choices=list_manifolds(),
+                        help="Manifold geometry to sample from")
+    parser.add_argument("--density",     type=str,   default=None,
+                        choices=list_densities(),
+                        help="Latent density (default: manifold's default density)")
+    parser.add_argument("--patch_size",  type=int,   default=8)
+    parser.add_argument("--nb_channels", type=int,   default=1)
+    parser.add_argument("--n_samples",   type=int,   default=25000)
+    parser.add_argument("--n_anchors",   type=int,   default=1000)
+    parser.add_argument("--k_mle",       type=int,   default=10)
     args = parser.parse_args()
 
     plot_submanifold_test(
-        distrib=args.distrib,
+        manifold=args.manifold,
+        density=args.density,
         patch_size=args.patch_size,
         nb_channels=args.nb_channels,
         n_samples=args.n_samples,
