@@ -84,21 +84,35 @@ def density_mixture_gaussian(n_samples: int, latent_dim: int, n_components: int 
 
 
 # ── manifold registry ─────────────────────────────────────────────────────────
-# A manifold maps latent coords z (n_samples, latent_dim) -> ambient coords
-# (n_samples, embed_dim), where embed_dim <= full_dim.
-# It also returns sigma_1: a characteristic scale for noise.
+# Each manifold function returns (coords, sigma_1, max_dim) where:
+#   coords:  (n_samples, embed_dim) — ambient coordinates before final projection
+#   sigma_1: characteristic scale for off-manifold noise
+#   max_dim: callable (full_dim) -> int, max supported intrinsic dim
 #
-# Signature: manifold_fn(z, d, full_dim) -> (coords, sigma_1)
+# The decorator splits this into two entries in MANIFOLDS:
+#   "fn":             (z, d, full_dim) -> (coords, sigma_1)
+#   "max_dim":        (full_dim) -> int
+#   "default_density": str
 
 MANIFOLDS = {}
 
 def register_manifold(name: str, default_density: str):
     """
-    Register a manifold with its recommended default density.
-    The default_density is used when the user does not specify one.
+    Register a manifold. The decorated function must return
+    (coords, sigma_1, max_dim_fn) where max_dim_fn is a callable (full_dim) -> int.
+    The decorator exposes fn(z, d, full_dim) -> (coords, sigma_1)
+    and max_dim(full_dim) -> int as separate entries in MANIFOLDS.
     """
     def decorator(fn):
-        MANIFOLDS[name] = {"fn": fn, "default_density": default_density}
+        # extract max_dim_fn by peeking at a minimal call
+        _, _, max_dim_fn = fn(torch.zeros(1, 1), 1, 1)
+
+        def _fn(z, d, full_dim):
+            coords, sigma_1, _ = fn(z, d, full_dim)
+            return coords, sigma_1
+
+        MANIFOLDS[name] = {"fn": _fn, "max_dim": max_dim_fn,
+                           "default_density": default_density}
         return fn
     return decorator
 
@@ -110,8 +124,9 @@ def manifold_linear(z: torch.Tensor, d: int, full_dim: int):
     latent_dim = d, embed_dim = d.
     """
     basis  = _random_orthonormal_basis(full_dim, d)
-    coords = z                                                    # (n_samples, d)
-    return coords @ basis.T, z.std().item() or 1.0
+    coords = z @ basis.T
+    sigma1 = z.std().item() if z.numel() > 1 else 1.0
+    return coords, sigma1, lambda fd: fd
 
 
 @register_manifold("sphere", default_density="gaussian")
@@ -120,40 +135,38 @@ def manifold_sphere(z: torch.Tensor, d: int, full_dim: int):
     S^d: normalise z ~ R^(d+1) to unit sphere.
     latent_dim = d+1, embed_dim = min(d+1, full_dim).
     """
-    z_norm = z / z.norm(dim=-1, keepdim=True)
+    z_norm    = z / z.norm(dim=-1, keepdim=True)
     embed_dim = min(z.shape[-1], full_dim)
-    return z_norm[:, :embed_dim], 1.0
+    return z_norm[:, :embed_dim], 1.0, lambda fd: fd - 1
 
 
 @register_manifold("torus", default_density="uniform")
 def manifold_torus(z: torch.Tensor, d: int, full_dim: int):
     """
     (S^1)^d: interpret z in [0,1]^d as angles theta = 2*pi*z.
-    latent_dim = d, embed_dim = min(2*d, full_dim).
+    latent_dim = d, embed_dim = 2*d.
+    Max supported d = full_dim // 2.
     """
-    thetas = 2 * math.pi * z                                     # (n_samples, d)
+    thetas = 2 * math.pi * z
     coords = torch.stack([thetas.cos(), thetas.sin()], dim=-1).reshape(z.shape[0], 2 * d)
-    embed_dim = min(2 * d, full_dim)
-    return coords[:, :embed_dim], 1.0
+    return coords, 1.0, lambda fd: fd // 2
 
 
 @register_manifold("swiss_roll", default_density="uniform")
 def manifold_swiss_roll(z: torch.Tensor, d: int, full_dim: int):
     """
-    Swiss roll x R^(d-2): z[:,0] -> t (rescaled to [1.5pi, 4.5pi]),
-    z[:,1:] -> extra linear dims for d>2.
-    latent_dim = d, embed_dim = min(d, full_dim).
+    Product of d independent 1D swiss roll curves, each mapping t -> (t·cos t, t·sin t)
+    with t = (1.5 + 3*z)*pi. Each curve is intrinsically 1D embedded in R^2,
+    so embed_dim = 2*d and max supported d = full_dim // 2.
     """
-    t = (1.5 + 3.0 * z[:, 0]) * math.pi                         # (n_samples,)
-    roll = torch.stack([t * t.cos(), t * t.sin()], dim=-1)       # (n_samples, 2)
-    if d == 1:
-        coords = t.unsqueeze(-1)
-    elif d == 2:
-        coords = roll
-    else:
-        coords = torch.cat([roll, z[:, 1:d - 1]], dim=-1)        # (n_samples, d)
-    embed_dim = min(coords.shape[-1], full_dim)
-    return coords[:, :embed_dim], 1.0
+    pieces = []
+    for k in range(d):
+        t = (1.5 + 3.0 * z[:, k]) * math.pi               # (n_samples,)
+        pieces.append(torch.stack([t * t.cos(), t * t.sin()], dim=-1))  # (n, 2)
+
+    coords    = torch.cat(pieces, dim=-1)                  # (n_samples, 2*d)
+    embed_dim = min(2 * d, full_dim)
+    return coords[:, :embed_dim], 1.0, lambda fd: fd // 2
 
 
 @register_manifold("poly", default_density="uniform")
@@ -162,24 +175,10 @@ def manifold_poly(z: torch.Tensor, d: int, full_dim: int, degree: int = 3):
     Veronese polynomial embedding: each dim of z is lifted to (z, z^2, ..., z^degree).
     latent_dim = d, embed_dim = min(d*degree, full_dim).
     """
-    t = 2 * z - 1                                                # rescale [0,1]^d -> [-1,1]^d
+    t      = 2 * z - 1
     powers = torch.cat([t ** k for k in range(1, degree + 1)], dim=-1)
     embed_dim = min(d * degree, full_dim)
-    return powers[:, :embed_dim], 1.0
-
-
-@register_manifold("product_spheres", default_density="gaussian")
-def manifold_product_spheres(z: torch.Tensor, d: int, full_dim: int):
-    """
-    (S^1)^d via pair-wise normalisation: split z into d pairs, normalise each.
-    latent_dim = 2*d, embed_dim = min(2*d, full_dim).
-    """
-    n_samples = z.shape[0]
-    pairs  = z.reshape(n_samples, d, 2)
-    pairs  = pairs / pairs.norm(dim=-1, keepdim=True)            # normalise each pair -> S^1
-    coords = pairs.reshape(n_samples, 2 * d)
-    embed_dim = min(2 * d, full_dim)
-    return coords[:, :embed_dim], 1.0
+    return powers[:, :embed_dim], 1.0, lambda fd: fd // degree
 
 
 # ── combined sampler ──────────────────────────────────────────────────────────
@@ -201,29 +200,37 @@ def register(name: str, density: str = None):
 def _sample_one(d: int, full_dim: int, n_samples: int,
                 manifold: str, density: str) -> torch.Tensor:
     """Sample n_samples points from the given manifold/density combination."""
-    m_entry   = MANIFOLDS[manifold]
+    m_entry     = MANIFOLDS[manifold]
     manifold_fn = m_entry["fn"]
     density_fn  = DENSITIES[density or m_entry["default_density"]]
+    max_d       = m_entry["max_dim"](full_dim)
 
-    # Determine latent_dim from manifold
+    assert d <= max_d, (
+        f"Manifold '{manifold}' supports d <= {max_d} for full_dim={full_dim}, got d={d}"
+    )
+
     latent_dims = {
-        "linear":          d,
-        "sphere":          min(d + 1, full_dim),
-        "torus":           d,
-        "swiss_roll":      max(d, 1),
-        "poly":            d,
-        "product_spheres": 2 * d,
+        "linear":      d,
+        "sphere":      min(d + 1, full_dim),
+        "torus":       d,
+        "swiss_roll":  max(d, 1),
+        "poly":        d,
     }
     latent_dim = latent_dims[manifold]
 
-    z              = density_fn(n_samples, latent_dim)            # (n_samples, latent_dim)
-    coords, sigma1 = manifold_fn(z, d, full_dim)                  # (n_samples, embed_dim)
+    z              = density_fn(n_samples, latent_dim)
+    coords, sigma1 = manifold_fn(z, d, full_dim)
     noise          = _nn_noise(n_samples, full_dim, d, sigma1)
     basis          = _random_orthonormal_basis(full_dim, coords.shape[-1])
-    return coords @ basis.T + noise                               # (n_samples, full_dim)
+    return coords @ basis.T + noise
 
 
 # ── public API ────────────────────────────────────────────────────────────────
+
+def get_max_dim(manifold: str, full_dim: int) -> int:
+    """Return the maximum supported intrinsic dim for a manifold given full_dim."""
+    return MANIFOLDS[manifold]["max_dim"](full_dim)
+
 
 def list_manifolds() -> list:
     """Return the names of all registered manifolds."""
@@ -257,9 +264,10 @@ def sample_patches(dimensions: torch.Tensor, patch_size: int, nb_channels: int,
 
     assert dimensions.min().item() >= 1, \
         f"All dimensions must be >= 1, got min={dimensions.min().item()}"
-    assert dimensions.max().item() <= full_dim, \
-        f"Max intrinsic dim {dimensions.max().item()} exceeds full_dim={full_dim} " \
-        f"(patch_size={patch_size}, nb_channels={nb_channels})"
+    max_d = get_max_dim(manifold, full_dim)
+    assert dimensions.max().item() <= max_d, \
+        f"Manifold '{manifold}' supports d <= {max_d} for full_dim={full_dim}, " \
+        f"got dimensions.max()={dimensions.max().item()}"
     assert manifold in MANIFOLDS, \
         f"Unknown manifold '{manifold}'. Available: {list_manifolds()}"
     assert density is None or density in DENSITIES, \

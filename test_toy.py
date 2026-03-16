@@ -1,4 +1,6 @@
 import torch
+import math
+import warnings
 import numpy as np
 import argparse
 import matplotlib.pyplot as plt
@@ -6,7 +8,7 @@ import matplotlib.gridspec as gridspec
 
 
 from dimension import compute_mle, compute_mle_averaged_over_k, patch_topk_dists
-from toy_distribs import sample_patches, list_manifolds, list_densities
+from toy_distribs import sample_patches, list_manifolds, list_densities, get_max_dim
 
 
 # ── PCA utils ────────────────────────────────────────────────────────────────
@@ -76,15 +78,17 @@ def compute_mle_dims(samples: torch.Tensor, k: int = 10, n_anchors: int = 1000):
 
 def plot_submanifold_test(patch_size=8, nb_channels=1, n_samples=25000, k_mle=10,
                           n_anchors=1000, manifold="linear", density=None):
-    # max dim = 64 <= full_dim = 8*8*1 = 64 ✓
-    dims = torch.tensor([
-        [1,  2,  4,  8],
-        [2,  4,  8, 16],
-        [4,  8, 16, 32],
-        [1,  8, 32, 64],
-    ])
-
     full_dim = nb_channels * patch_size * patch_size
+    max_d    = get_max_dim(manifold, full_dim)
+
+    dims = torch.tensor([
+        [ 1,  1,  2,  2],
+        [ 3,  4,  6,  8],
+        [11, 14, 18, 23],
+        [26, 29, 32, max_d],
+    ]).clamp(max=max_d)
+    nb_h, nb_w = dims.shape
+
     nb_h, nb_w = dims.shape
 
     threshold = 0.999
@@ -103,32 +107,37 @@ def plot_submanifold_test(patch_size=8, nb_channels=1, n_samples=25000, k_mle=10
 
     distrib_label = f"{manifold}:{density or 'default'}"
 
-    # row 0: heatmaps
-    _plot_heatmap(fig.add_subplot(gs[0, 0]), dims.cpu().numpy(),    "Target intrinsic dim",           dims)
-    _plot_heatmap(fig.add_subplot(gs[0, 1]), pca_dims,        f"PCA-estimated dim ({threshold:.0%} var)",    dims)
-    _plot_heatmap(fig.add_subplot(gs[0, 2]), mle_dims_np,     f"MLE dim (k={k_mle})",           dims)
-
-    # row 1: avg-MLE heatmap, unified scatter, spectra
-    _plot_heatmap(fig.add_subplot(gs[1, 0]), mle_avg_dims_np, f"MLE avg dim (k=3..{k_mle})",   dims)
-    _plot_scatter_multi(fig.add_subplot(gs[1, 1]), target, {
-        f"PCA ({threshold:.0%})":         pca_dims.flatten(),
-        f"MLE k={k_mle}":                 mle_dims_np.flatten(),
-        f"MLE avg k=3..{k_mle}":          mle_avg_dims_np.flatten(),
+    # row 0: target heatmap, scatter, spectra
+    _plot_heatmap(fig.add_subplot(gs[0, 0]), dims.cpu().numpy(), "Target intrinsic dim", dims)
+    _plot_scatter_multi(fig.add_subplot(gs[0, 1]), target, {
+        f"PCA ({threshold:.0%})":  pca_dims.flatten(),
+        f"MLE k={k_mle}":          mle_dims_np.flatten(),
+        f"MLE avg k=3..{k_mle}":   mle_avg_dims_np.flatten(),
     })
-    _plot_spectra(fig.add_subplot(gs[1, 2]), spectra, dims, nb_h, nb_w)
+    _plot_spectra(fig.add_subplot(gs[0, 2]), spectra, dims, nb_h, nb_w)
 
-    # row 2: patch grid, PCA residuals, MLE avg residuals
-    _plot_patch_grid(fig.add_subplot(gs[2, 0]), samples[:, :, 0, :], patch_size, nb_channels, nb_h, nb_w)
-    _plot_residuals(fig.add_subplot(gs[2, 1]), target, pca_dims.flatten(),        "PCA residuals")
-    _plot_residuals(fig.add_subplot(gs[2, 2]), target, mle_avg_dims_np.flatten(), f"MLE avg residuals")
+    # row 1: PCA, MLE, MLE avg heatmaps
+    _plot_heatmap(fig.add_subplot(gs[1, 0]), pca_dims,        f"PCA-estimated dim ({threshold:.0%} var)", dims)
+    _plot_heatmap(fig.add_subplot(gs[1, 1]), mle_dims_np,     f"MLE dim (k={k_mle})",                    dims)
+    _plot_heatmap(fig.add_subplot(gs[1, 2]), mle_avg_dims_np, f"MLE avg dim (k=3..{k_mle})",             dims)
+
+    # row 2: PCA residuals, MLE residuals, MLE avg residuals
+    _plot_residuals(fig.add_subplot(gs[2, 0]), target, pca_dims.flatten(),        "PCA residuals")
+    _plot_residuals(fig.add_subplot(gs[2, 1]), target, mle_dims_np.flatten(),     f"MLE residuals (k={k_mle})")
+    _plot_residuals(fig.add_subplot(gs[2, 2]), target, mle_avg_dims_np.flatten(), f"MLE avg residuals (k=3..{k_mle})")
 
     fig.suptitle(
         f"Submanifold patch test  |  distrib={distrib_label}  patch_size={patch_size}  nb_channels={nb_channels}  "
         f"full_dim={full_dim}  n_samples={n_samples}  n_anchors={n_anchors}  pca_threshold={threshold:.0%}  k_mle={k_mle}",
         fontsize=12,
     )
-    plt.tight_layout()
-    plt.savefig("submanifold_test.png", dpi=150, bbox_inches="tight")
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*tight_layout.*")
+        plt.tight_layout()
+    density_label = density or "default"
+    fname = f"{manifold}__{density_label}__k{k_mle}.png"
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    print(f"Saved to {fname}")
     plt.show()
 
 
@@ -179,22 +188,6 @@ def _plot_spectra(ax, spectra, dims, nb_h, nb_w):
     plt.colorbar(plt.cm.ScalarMappable(cmap=cmap,
                  norm=plt.Normalize(vmin=vmin, vmax=vmax)),
                  ax=ax, fraction=0.046, label="target dim")
-
-
-def _plot_patch_grid(ax, single_sample, patch_size, nb_channels, nb_h, nb_w):
-    # single_sample: (nb_h, nb_w, full_dim) — one sample across all patch positions
-    grid = np.zeros((nb_h * patch_size, nb_w * patch_size))
-    for i in range(nb_h):
-        for j in range(nb_w):
-            tile = single_sample[i, j].cpu().numpy().reshape(nb_channels, patch_size, patch_size)[0]
-            tile = (tile - tile.min()) / (tile.max() - tile.min() + 1e-8)
-            grid[i*patch_size:(i+1)*patch_size,
-                 j*patch_size:(j+1)*patch_size] = tile
-    ax.imshow(grid, cmap="gray", aspect="auto")
-    ax.set_title("Patch visualisation (ch 0, sample 0)", fontsize=11)
-    ax.set_xticks([(j + 0.5) * patch_size for j in range(nb_w)])
-    ax.set_yticks([(i + 0.5) * patch_size for i in range(nb_h)])
-    ax.set_xticklabels(range(nb_w)); ax.set_yticklabels(range(nb_h))
 
 
 def _plot_residuals(ax, target, estimated, title="Residuals"):
