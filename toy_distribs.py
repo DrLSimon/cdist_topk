@@ -15,8 +15,8 @@ def _nn_noise(n_samples: int, full_dim: int, d: int, sigma_1: float) -> torch.Te
     Isotropic noise scaled well below the expected nearest-neighbour distance
     on the manifold: eps ~ sigma_1 / n^(1/d) * 1e-2
     """
-    nn_dist_scale = sigma_1 / (n_samples ** (1.0 / d))
-    return nn_dist_scale * 1e-2 * torch.randn(n_samples, full_dim)
+    nn_dist_scale = sigma_1 / math.sqrt(full_dim)
+    return nn_dist_scale * 1e-3 * torch.randn(n_samples, full_dim)
 
 
 def _spectral_sigma(d: int) -> torch.Tensor:
@@ -219,6 +219,7 @@ def _sample_one(d: int, full_dim: int, n_samples: int,
     latent_dim = latent_dims[manifold]
 
     z              = density_fn(n_samples, latent_dim)
+    
     coords, sigma1 = manifold_fn(z, d, full_dim)
     noise          = _nn_noise(n_samples, full_dim, d, sigma1)
     basis          = _random_orthonormal_basis(full_dim, coords.shape[-1])

@@ -82,8 +82,8 @@ def plot_submanifold_test(patch_size=8, nb_channels=1, n_samples=25000, k_mle=10
     max_d    = get_max_dim(manifold, full_dim)
 
     dims = torch.tensor([
-        [ 1,  1,  2,  2],
-        [ 3,  4,  6,  8],
+        [ 1,  2,  3,  4],
+        [ 5,  6,  7,  8],
         [11, 14, 18, 23],
         [26, 29, 32, max_d],
     ]).clamp(max=max_d)
@@ -153,7 +153,7 @@ def _plot_heatmap(ax, data, title, dims_ref):
     for i in range(nb_h):
         for j in range(nb_w):
             val = data[i, j]
-            label = "nan" if np.isnan(val) else str(int(val))
+            label = "nan" if np.isnan(val) else f'{val:1.1f}'
             ax.text(j, i, label,
                     ha="center", va="center", color="white", fontsize=9)
 
