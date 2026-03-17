@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 
-from dimension import compute_mle_dims, compute_pca_dims
+from dimension import compute_mle_dims, compute_pca_dims, compute_mle_dims_variance
 from toy_distribs import sample_patches, list_manifolds, list_densities, get_max_dim
 
 
@@ -35,6 +35,9 @@ def plot_submanifold_test(patch_size=8, nb_channels=1, n_samples=25000, k_mle=10
     pca_dims          = compute_pca_dims(samples, threshold=threshold)
     pca_dims_np          = pca_dims.cpu().numpy()
     mle_dims, mle_avg_dims     = compute_mle_dims(samples, k=k_mle, n_anchors=n_anchors)
+    mle_dims_var         = compute_mle_dims_variance(samples, k=k_mle, n_anchors=n_anchors,
+                                                     n_subsample=1_000, n_trials=10);
+    mle_dims_std_np      = mle_dims_var.sqrt().cpu().numpy()
     mle_dims_np                = mle_dims.cpu().numpy()
     mle_avg_dims_np            = mle_avg_dims.cpu().numpy()
     target                     = dims.cpu().numpy().flatten()
@@ -46,7 +49,8 @@ def plot_submanifold_test(patch_size=8, nb_channels=1, n_samples=25000, k_mle=10
 
     # row 0: target heatmap, scatter, 
     _plot_heatmap(fig.add_subplot(gs[0, 0]), dims.cpu().numpy(), "Target intrinsic dim", dims)
-    _plot_scatter_multi(fig.add_subplot(gs[0, 1]), target, {
+    _plot_heatmap(fig.add_subplot(gs[0, 1]), mle_dims_std_np, f"STD MLE dims (k={k_mle})", dims)
+    _plot_scatter_multi(fig.add_subplot(gs[0, 2]), target, {
         f"PCA ({threshold:.0%})":  pca_dims_np.flatten(),
         f"MLE k={k_mle}":          mle_dims_np.flatten(),
         f"MLE avg k=3..{k_mle}":   mle_avg_dims_np.flatten(),

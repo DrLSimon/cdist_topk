@@ -49,7 +49,7 @@ def compute_mle_averaged_over_k(dists, kmin=None, kmax=None, fixnan=True):
         _, inv_dims = compute_mle(dists, k, fixnan)
         return inv_dims
 
-    avg_est = 1/(sum(inv_est(k) for k in range(kmin, kmax))/(kmax-kmin))
+    avg_est = 1/(sum(inv_est(k) for k in range(kmin, kmax+1))/(kmax-kmin))
     return avg_est
 
 
@@ -79,6 +79,21 @@ def compute_mle_dims(samples: torch.Tensor, k: int = 10, n_anchors: int = 1000):
     mle_dims,     _ = compute_mle(dists, k=k, fixnan=True)
     mle_avg_dims    = compute_mle_averaged_over_k(dists, kmax=k)
     return mle_dims, mle_avg_dims
+
+
+def compute_mle_dims_variance(sample_pool, k, n_anchors, n_subsample, n_trials):
+    mle_dims_trials = []
+    for _ in range(n_trials):
+        # Subsample defines the REFERENCE set
+        ref_idx = torch.randperm(sample_pool.shape[-2])[:n_subsample]
+        ref_samples     = sample_pool[:, :, ref_idx, :]
+
+        # Anchors are a subset of the reference — self-exclusion is safe
+        mle_dims, _ = compute_mle_dims(ref_samples, k=k, n_anchors=n_anchors)
+        mle_dims_trials.append(mle_dims)
+    mle_dims_trials = torch.stack(mle_dims_trials, dim=0)  # (n_trials, Ph, Pw)
+    mle_dims_var = mle_dims_trials.var(dim=0)  # (Ph, Pw)
+    return mle_dims_var
 
 # ── PCA utils ────────────────────────────────────────────────────────────────
 def pca_effective_dim(samples: torch.Tensor, threshold: float = 0.999):

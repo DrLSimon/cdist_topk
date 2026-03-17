@@ -121,5 +121,5 @@ def make_loader(x: torch.Tensor, batch_dim: int = -2, **kwargs) -> DataLoader:
         if transform: out = transform(out)
         return out
     loader = DataLoader(x_perm, collate_fn=collate, **kwargs)
-    return tqdm.tqdm(loader) if use_tqdm else loader
+    return tqdm.tqdm(loader, leave=False) if use_tqdm else loader
 

@@ -115,10 +115,8 @@ def manifold_linear(z: torch.Tensor, d: int, full_dim: int):
     Linear submanifold: z is used directly as latent coords.
     latent_dim = d, embed_dim = d.
     """
-    basis  = _random_orthonormal_basis(full_dim, d)
-    coords = z @ basis.T
     sigma1 = 1e-3
-    return coords, sigma1, lambda fd: fd
+    return z, sigma1, lambda fd: fd
 
 
 @register_manifold("sphere", default_density="gaussian")
@@ -170,7 +168,7 @@ def manifold_poly(z: torch.Tensor, d: int, full_dim: int, degree: int = 3):
     t      = 2 * z - 1
     powers = torch.cat([t ** k for k in range(1, degree + 1)], dim=-1)
     embed_dim = min(d * degree, full_dim)
-    return powers[:, :embed_dim], 1e-3, lambda fd: fd // degree
+    return powers[:, :embed_dim], 1e-2, lambda fd: fd // degree
 
 
 # ── combined sampler ──────────────────────────────────────────────────────────
