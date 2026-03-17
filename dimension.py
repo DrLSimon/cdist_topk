@@ -95,6 +95,39 @@ def compute_mle_dims_variance(sample_pool, k, n_anchors, n_subsample, n_trials):
     mle_dims_var = mle_dims_trials.var(dim=0)  # (Ph, Pw)
     return mle_dims_var
 
+def compute_mle_dims_sample_variance(sample_pool: torch.Tensor, k: int, n_anchors: int, n_subsample: int, n_trials: int):
+    nb_h, nb_w, n_samples, _ = sample_pool.shape
+    assert n_anchors + n_subsample <= n_samples, (
+        f"n_anchors + n_subsample ({n_anchors + n_subsample}) must be <= n_samples ({n_samples})"
+    )
+
+    # Fix anchors once, reserve the rest as the pool for reference subsampling
+    perm          = torch.randperm(n_samples)
+    anchor_idx    = perm[:n_anchors]
+    remaining_idx = perm[n_anchors:]  # size: n_samples - n_anchors
+
+    anchors = sample_pool[:, :, anchor_idx, :]  # (Ph, Pw, n_anchors, D)
+
+    inv_dim_trials = []
+    for _ in range(n_trials):
+        ref_idx = remaining_idx[torch.randperm(len(remaining_idx))[:n_subsample]]
+        ref     = sample_pool[:, :, ref_idx, :]
+
+        dists   = patch_topk_dists(anchors, ref, k=k, remove_self=False)
+
+        inv_dim = torch.log(dists[:, :, :, k - 1:k] / dists[:, :, :, 0:k - 1]).sum(dim=-1) / (k - 2)
+        inv_dim_trials.append(inv_dim)
+
+    inv_dim_trials = torch.stack(inv_dim_trials, dim=0)  # (n_trials, Ph, Pw, n_anchors)
+
+    per_anchor_var = inv_dim_trials.var(dim=0)            # (Ph, Pw, n_anchors)
+    mean_var       = per_anchor_var.mean(dim=-1)          # (Ph, Pw)
+
+    mean_inv_dim   = inv_dim_trials.mean(dim=(0, -1))     # (Ph, Pw)
+    dim_sample_var = mean_var / (mean_inv_dim ** 4)
+
+    return dim_sample_var
+
 # ── PCA utils ────────────────────────────────────────────────────────────────
 def pca_effective_dim(samples: torch.Tensor, threshold: float = 0.999):
     """
