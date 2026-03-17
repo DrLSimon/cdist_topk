@@ -52,3 +52,60 @@ def compute_mle_averaged_over_k(dists, kmin=None, kmax=None, fixnan=True):
     avg_est = 1/(sum(inv_est(k) for k in range(kmin, kmax))/(kmax-kmin))
     return avg_est
 
+
+def compute_mle_dims(samples: torch.Tensor, k: int = 10, n_anchors: int = 1000):
+    """
+    Estimate intrinsic dimensionality via MLE (Levina-Bickel) for every patch position.
+
+    Args:
+        samples:   (Ph, Pw, N, full_dim) — same convention as images_to_patches
+        k:         number of nearest neighbours for MLE (default 10)
+        n_anchors: number of randomly selected query points (batch dim is -2)
+
+    Returns:
+        mle_dims:     (Ph, Pw) tensor, MLE estimate at fixed k
+        mle_avg_dims: (Ph, Pw) tensor, MLE estimate averaged over k in [3, k]
+    """
+    nb_h, nb_w, n_samples, _ = samples.shape
+    n_anchors = min(n_anchors, n_samples)
+
+    # random anchor indices, same draw for all patch positions
+    idx      = torch.randperm(n_samples)[:n_anchors]
+    anchors  = samples[:, :, idx, :]   # (Ph, Pw, n_anchors, full_dim)
+
+    # (Ph, Pw, n_anchors, k) — anchor queries into full samples, excluding self-hit
+    dists = patch_topk_dists(anchors, samples, k=k + 1, remove_self=True)
+
+    mle_dims,     _ = compute_mle(dists, k=k, fixnan=True)
+    mle_avg_dims    = compute_mle_averaged_over_k(dists, kmax=k)
+    return mle_dims, mle_avg_dims
+
+# ── PCA utils ────────────────────────────────────────────────────────────────
+def pca_effective_dim(samples: torch.Tensor, threshold: float = 0.999):
+    """
+    samples: (n_samples, full_dim)
+    Returns effective_dim
+    """
+    S = samples - samples.mean(dim=0)
+    _, sv, _ = torch.linalg.svd(S, full_matrices=False)
+    var_ratio = (sv ** 2) / (sv ** 2).sum()
+    return int(torch.searchsorted(var_ratio.cumsum(dim=0), threshold).item()) + 1
+
+
+def compute_pca_dims(samples: torch.Tensor, threshold: float = 0.999):
+    """
+    Compute PCA effective dimensionality for every patch position.
+    Args:
+        samples:   (Ph, Pw, N, C*p*p) — same convention as images_to_patches
+        threshold: cumulative variance threshold (default 0.95)
+    Returns:
+        pca_dims: (nb_h, nb_w) torch.Tensor of effective dims
+    """
+    nb_h, nb_w, _, _ = samples.shape
+    pca_dims = torch.zeros((nb_h, nb_w), dtype=torch.int32, device=samples.device)
+    for i in range(nb_h):
+        for j in range(nb_w):
+            pca_dims[i, j] = pca_effective_dim(
+                samples[i, j, :, :], threshold
+            )
+    return pca_dims

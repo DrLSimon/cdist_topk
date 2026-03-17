@@ -16,20 +16,12 @@ def _nn_noise(n_samples: int, full_dim: int, d: int, sigma_1: float) -> torch.Te
     on the manifold: eps ~ sigma_1 / n^(1/d) * 1e-2
     """
     nn_dist_scale = sigma_1 / math.sqrt(full_dim)
-    return nn_dist_scale * 1e-3 * torch.randn(n_samples, full_dim)
+    return nn_dist_scale * torch.randn(n_samples, full_dim)
 
 
 def _spectral_sigma(d: int) -> torch.Tensor:
     """Decaying standard deviations: sigma_k = 1/sqrt(k)."""
     return 1.0 / torch.sqrt(torch.arange(1, d + 1, dtype=torch.float32))
-
-
-def _embed(coords: torch.Tensor, full_dim: int, d: int, sigma_1: float = 1.0) -> torch.Tensor:
-    """Project (n_samples, embed_dim) coords into R^full_dim via a random orthonormal basis."""
-    n_samples, embed_dim = coords.shape
-    basis = _random_orthonormal_basis(full_dim, embed_dim)
-    noise = _nn_noise(n_samples, full_dim, d, sigma_1)
-    return coords @ basis.T + noise
 
 
 # ── density registry ──────────────────────────────────────────────────────────
@@ -125,7 +117,7 @@ def manifold_linear(z: torch.Tensor, d: int, full_dim: int):
     """
     basis  = _random_orthonormal_basis(full_dim, d)
     coords = z @ basis.T
-    sigma1 = z.std().item() if z.numel() > 1 else 1.0
+    sigma1 = 1e-3
     return coords, sigma1, lambda fd: fd
 
 
@@ -137,7 +129,7 @@ def manifold_sphere(z: torch.Tensor, d: int, full_dim: int):
     """
     z_norm    = z / z.norm(dim=-1, keepdim=True)
     embed_dim = min(z.shape[-1], full_dim)
-    return z_norm[:, :embed_dim], 1.0, lambda fd: fd - 1
+    return z_norm[:, :embed_dim], 1e-3, lambda fd: fd - 1
 
 
 @register_manifold("torus", default_density="uniform")
@@ -149,7 +141,7 @@ def manifold_torus(z: torch.Tensor, d: int, full_dim: int):
     """
     thetas = 2 * math.pi * z
     coords = torch.stack([thetas.cos(), thetas.sin()], dim=-1).reshape(z.shape[0], 2 * d)
-    return coords, 1.0, lambda fd: fd // 2
+    return coords, 1e-3, lambda fd: fd // 2
 
 
 @register_manifold("swiss_roll", default_density="uniform")
@@ -166,7 +158,7 @@ def manifold_swiss_roll(z: torch.Tensor, d: int, full_dim: int):
 
     coords    = torch.cat(pieces, dim=-1)                  # (n_samples, 2*d)
     embed_dim = min(2 * d, full_dim)
-    return coords[:, :embed_dim], 1.0, lambda fd: fd // 2
+    return coords[:, :embed_dim], 1e-3, lambda fd: fd // 2
 
 
 @register_manifold("poly", default_density="uniform")
@@ -178,25 +170,10 @@ def manifold_poly(z: torch.Tensor, d: int, full_dim: int, degree: int = 3):
     t      = 2 * z - 1
     powers = torch.cat([t ** k for k in range(1, degree + 1)], dim=-1)
     embed_dim = min(d * degree, full_dim)
-    return powers[:, :embed_dim], 1.0, lambda fd: fd // degree
+    return powers[:, :embed_dim], 1e-3, lambda fd: fd // degree
 
 
 # ── combined sampler ──────────────────────────────────────────────────────────
-
-# Legacy flat registry for backwards compatibility with --distrib
-DISTRIBUTIONS = {}
-
-def register(name: str, density: str = None):
-    """
-    Register a combined (manifold, density) pair under a single name.
-    If density is None, uses the manifold's default density.
-    """
-    def decorator(fn):
-        DISTRIBUTIONS[name] = fn
-        return fn
-    return decorator
-
-
 def _sample_one(d: int, full_dim: int, n_samples: int,
                 manifold: str, density: str) -> torch.Tensor:
     """Sample n_samples points from the given manifold/density combination."""
