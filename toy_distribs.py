@@ -198,7 +198,7 @@ def _sample_one(d: int, full_dim: int, n_samples: int,
     coords, sigma1 = manifold_fn(z, d, full_dim)
     noise          = _nn_noise(n_samples, full_dim, d, sigma1)
     basis          = _random_orthonormal_basis(full_dim, coords.shape[-1])
-    return coords @ basis.T + noise
+    return coords @ basis.T #+ noise
 
 
 # ── public API ────────────────────────────────────────────────────────────────
