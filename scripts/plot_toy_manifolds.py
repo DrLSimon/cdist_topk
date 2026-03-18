@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import torch
 import numpy as np
 import warnings
@@ -7,10 +11,11 @@ import matplotlib.gridspec as gridspec
 from matplotlib.gridspec import GridSpecFromSubplotSpec
 
 
-from dimension import (compute_mle_dims, compute_pca_dims,
-                       compute_mle_dims_variance, compute_mle_dims_sample_variance,
-                       check_poisson_regime)
-from toy_distribs import sample_patches, list_manifolds, list_densities, get_max_dim
+from intrinsic_dim.estimators.mle import compute_mle_dims
+from intrinsic_dim.estimators.pca import compute_pca_dims
+from intrinsic_dim.estimators.mle_variance import compute_mle_dims_variance, compute_mle_dims_sample_variance
+from intrinsic_dim.estimators.diagnostics import check_poisson_regime
+from intrinsic_dim.synthetic.sampling import sample_patches, list_manifolds, list_densities, get_max_dim
 
 
 def make_dims_grid(max_d: int) -> torch.Tensor:
