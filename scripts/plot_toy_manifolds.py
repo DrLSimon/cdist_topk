@@ -109,7 +109,7 @@ def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10,
     _plot_scatter_multi(ax_scatter, target, {
         f"PCA ({pca_threshold:.0%})": pca_dims_np.flatten(),
         f"MLE k={k_mle}":             mle_dims_np.flatten(),
-        f"MLE avg k=3..{k_mle}":      mle_avg_dims_np.flatten(),
+        f"MLE avg k=5..{k_mle}":      mle_avg_dims_np.flatten(),
     })
     _plot_residuals(ax_res[0], target, pca_dims_np.flatten(),     "PCA residuals")
     _plot_residuals(ax_res[1], target, mle_dims_np.flatten(),     f"MLE residuals (k={k_mle})")

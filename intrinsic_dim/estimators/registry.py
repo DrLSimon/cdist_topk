@@ -88,12 +88,12 @@ class MLEAvgDimEstimator(MLEDimEstimator):
     Parameters
     ----------
     k         : upper bound for k averaging (default 10)
-    kmin      : lower bound for k averaging (default 3)
+    kmin      : lower bound for k averaging (default 5)
     n_anchors : random query points per patch position (default 1000)
     fixnan    : mask NaN/Inf values in the log-ratio (default True)
     """
 
-    def __init__(self, k: int = 10, kmin: int = 3, n_anchors: int = 1000, fixnan: bool = True):
+    def __init__(self, k: int = 10, kmin: int = 5, n_anchors: int = 1000, fixnan: bool = True):
         super().__init__(k=k, n_anchors=n_anchors, fixnan=fixnan)
         self.kmin = kmin
 
