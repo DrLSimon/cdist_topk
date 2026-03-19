@@ -11,8 +11,7 @@ import matplotlib.gridspec as gridspec
 from matplotlib.gridspec import GridSpecFromSubplotSpec
 
 
-from intrinsic_dim.estimators.mle import compute_mle_dims
-from intrinsic_dim.estimators.pca import compute_pca_dims
+from intrinsic_dim import get_estimator
 from intrinsic_dim.estimators.mle_variance import compute_mle_dims_variance, compute_mle_dims_sample_variance
 from intrinsic_dim.estimators.diagnostics import check_poisson_regime
 from intrinsic_dim.synthetic.sampling import sample_patches, list_manifolds, list_densities, get_max_dim
@@ -45,11 +44,15 @@ def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10,
 
     samples = sample_patches(dims, patch_size=1, nb_channels=full_dim, n_samples=n_samples,
                               manifold=manifold, density=density)
+    pca_estimator          = get_estimator("pca", threshold=pca_threshold)
+    mle_estimator          = get_estimator("mle", k=k_mle, n_anchors=n_anchors)
+    mle_avg_estimator      = get_estimator("mle_avg", k=k_mle, n_anchors=n_anchors)
 
-    pca_dims               = compute_pca_dims(samples, threshold=pca_threshold)
+    pca_dims               = pca_estimator(samples)
     pca_dims_np            = pca_dims.cpu().numpy()
-    mle_dims, mle_avg_dims = compute_mle_dims(samples, k=k_mle, n_anchors=n_anchors)
+    mle_dims               = mle_estimator(samples)
     mle_dims_np            = mle_dims.cpu().numpy()
+    mle_avg_dims           = mle_avg_estimator(samples)
     mle_avg_dims_np        = mle_avg_dims.cpu().numpy()
 
     # ── extra debug data ──────────────────────────────────────────────────────

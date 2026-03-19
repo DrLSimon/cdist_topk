@@ -1,6 +1,6 @@
 
 import torch
-from intrinsic_dim.estimators.mle import compute_mle_dims
+from intrinsic_dim.estimators.mle_estimator import compute_mle_dims
 from intrinsic_dim.neighbors.patch_knn import patch_topk_dists
 
 def compute_mle_dims_variance(sample_pool, k, n_anchors, n_subsample, n_trials):

@@ -1,6 +1,6 @@
 
 import torch
-from intrinsic_dim.estimators.mle import compute_mle
+from intrinsic_dim.estimators.mle_estimator import compute_mle
 from intrinsic_dim.neighbors.patch_knn import patch_topk_dists
 
 def check_poisson_regime(samples: torch.Tensor, k: int = 10, n_anchors: int = 1000,
