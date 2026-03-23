@@ -29,7 +29,7 @@ def make_dims_grid(max_d: int) -> torch.Tensor:
     return torch.tensor(vals).unsqueeze(0)  # (1, N)
 
 
-def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10,
+def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10, unbiased=True,
                           n_anchors=1000, manifold="linear", density=None,
                           pca_threshold=0.999, n_trials=10, n_subsample=1000,
                           extra_debug_plot=None):
@@ -45,8 +45,8 @@ def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10,
     samples = sample_patches(dims, patch_size=1, nb_channels=full_dim, n_samples=n_samples,
                               manifold=manifold, density=density)
     pca_estimator          = get_estimator("pca", threshold=pca_threshold)
-    mle_estimator          = get_estimator("mle", k=k_mle, n_anchors=n_anchors)
-    mle_avg_estimator      = get_estimator("mle_avg", k=k_mle, n_anchors=n_anchors)
+    mle_estimator          = get_estimator("mle", k=k_mle, n_anchors=n_anchors, unbiased=unbiased)
+    mle_avg_estimator      = get_estimator("mle_avg", k=k_mle, n_anchors=n_anchors, unbiased=unbiased)
 
     pca_dims               = pca_estimator(samples)
     pca_dims_np            = pca_dims.cpu().numpy()
@@ -62,7 +62,7 @@ def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10,
     if extra_debug_plot == "variance":
         var_est = compute_mle_dims_variance(
             samples, k=k_mle, n_anchors=n_anchors,
-            n_subsample=n_subsample, n_trials=n_trials)
+            n_subsample=n_subsample, n_trials=n_trials, unbiased=unbiased)
         var_ps = compute_mle_dims_sample_variance(
             samples, k=k_mle, n_anchors=n_anchors,
             n_subsample=n_subsample, n_trials=n_trials)
@@ -157,7 +157,8 @@ def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10,
 
     density_label = density or "default"
     debug_label   = f"__{extra_debug_plot}" if extra_debug_plot else ""
-    fname = f"{manifold}__{density_label}__k{k_mle}__fd{full_dim}{debug_label}.png"
+    unbias_label   = "__biased" if not unbiased else ""
+    fname = f"{manifold}__{density_label}__k{k_mle}{unbias_label}__fd{full_dim}{debug_label}.png"
     plt.savefig(fname, dpi=150, bbox_inches="tight")
     print(f"Saved to {fname}")
     plt.show()
@@ -248,6 +249,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_samples",        type=int,   default=25000)
     parser.add_argument("--n_anchors",        type=int,   default=1000)
     parser.add_argument("--k_mle",            type=int,   default=10)
+    parser.add_argument("--no-unbiased", dest="unbiased", action="store_false", help="Disable bias correction for MLE estimator")
     parser.add_argument("--pca_threshold",    type=float, default=0.999)
     parser.add_argument("--n_trials",         type=int,   default=10)
     parser.add_argument("--n_subsample",      type=int,   default=1000)
@@ -262,6 +264,7 @@ if __name__ == "__main__":
         n_samples=args.n_samples,
         n_anchors=args.n_anchors,
         k_mle=args.k_mle,
+        unbiased=args.unbiased,
         pca_threshold=args.pca_threshold,
         n_trials=args.n_trials,
         n_subsample=args.n_subsample,

@@ -12,7 +12,7 @@ def masked_mean(tensor, dim=None, axis=None):
     mask = torch.isnan(tensor) | torch.isinf(tensor)
     return tensor.masked_fill(mask, 0).sum(dim=dim) / (~mask).sum(dim=dim).float()
 
-def compute_mle(dists, k, fixnan, unbiased=False):
+def compute_mle(dists, k, fixnan, unbiased):
     '''
     Note: if unbiased is True, the MLE estimate is multiplied by a correction factor to make it unbiased.
        the factor accounts for
@@ -34,20 +34,20 @@ def compute_mle(dists, k, fixnan, unbiased=False):
         dim_est *= (k-1)/(k-2)/(1-1/(k-3)) #!note correction factor for harmonic means
     return dim_est, inv_dim_est
 
-def compute_mle_averaged_over_k(dists, kmin=None, kmax=None, fixnan=True):
+def compute_mle_averaged_over_k(dists, kmin=None, kmax=None, fixnan=True, unbiased=True):
     if kmax is None:
         kmax = dists.shape[-1]
     if kmin is None:
         kmin = 5
     assert kmin >= 5, f'Beware kmin should larger than 5 (to divide by (1-1/(k-3)) and here {kmin=}'
     def inv_est(k):
-        _, inv_dims = compute_mle(dists, k, fixnan)
+        _, inv_dims = compute_mle(dists, k, fixnan, unbiased)
         return inv_dims
 
     avg_est = 1/(sum(inv_est(k) for k in range(kmin, kmax+1))/(kmax+1-kmin))
     return avg_est
 
-def compute_mle_dims(samples: torch.Tensor, k: int = 10, n_anchors: int = 1000):
+def compute_mle_dims(samples: torch.Tensor, k: int = 10, n_anchors: int = 1000, unbiased: bool = True):
     """
     Estimate intrinsic dimensionality via MLE (Levina-Bickel) for every patch position.
 
@@ -70,6 +70,6 @@ def compute_mle_dims(samples: torch.Tensor, k: int = 10, n_anchors: int = 1000):
     # (Ph, Pw, n_anchors, k) — anchor queries into full samples, excluding self-hit
     dists = patch_topk_dists(anchors, samples, k=k + 1, remove_self=True)
 
-    mle_dims,     _ = compute_mle(dists, k=k, fixnan=True)
-    mle_avg_dims    = compute_mle_averaged_over_k(dists, kmax=k)
+    mle_dims,     _ = compute_mle(dists, k=k, fixnan=True, unbiased=unbiased)  # (Ph, Pw)
+    mle_avg_dims    = compute_mle_averaged_over_k(dists, kmax=k, unbiased=unbiased)  # (Ph, Pw)
     return mle_dims, mle_avg_dims

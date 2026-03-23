@@ -3,7 +3,7 @@ import torch
 from intrinsic_dim.neighbors.patch_knn import patch_topk_dists
 from .mle_estimator import compute_mle_dims
 
-def compute_mle_dims_variance(sample_pool, k, n_anchors, n_subsample, n_trials):
+def compute_mle_dims_variance(sample_pool, k, n_anchors, n_subsample, n_trials, unbiased):
     mle_dims_trials = []
     for _ in range(n_trials):
         # Subsample defines the REFERENCE set
@@ -11,7 +11,7 @@ def compute_mle_dims_variance(sample_pool, k, n_anchors, n_subsample, n_trials):
         ref_samples     = sample_pool[:, :, ref_idx, :]
 
         # Anchors are a subset of the reference — self-exclusion is safe
-        mle_dims, _ = compute_mle_dims(ref_samples, k=k, n_anchors=n_anchors)
+        mle_dims, _ = compute_mle_dims(ref_samples, k=k, n_anchors=n_anchors, unbiased=unbiased)
         mle_dims_trials.append(mle_dims)
     mle_dims_trials = torch.stack(mle_dims_trials, dim=0)  # (n_trials, Ph, Pw)
     mle_dims_var = mle_dims_trials.var(dim=0)  # (Ph, Pw)

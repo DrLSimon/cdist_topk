@@ -56,12 +56,15 @@ class MLEDimEstimator:
     k         : number of nearest neighbours (default 10)
     n_anchors : random query points per patch position (default 1000)
     fixnan    : mask NaN/Inf values in the log-ratio (default True)
+    unbiased  : apply bias correction factor to make the estimate unbiased (default True)
     """
 
-    def __init__(self, k: int = 10, n_anchors: int = 1000, fixnan: bool = True):
+    def __init__(self, k: int = 10, n_anchors: int = 1000, 
+                 fixnan: bool = True, unbiased : bool = True):
         self.k         = k
         self.n_anchors = n_anchors
         self.fixnan    = fixnan
+        self.unbiased    = unbiased
 
     def _get_dists(self, samples: torch.Tensor) -> torch.Tensor:
         n_samples   = samples.shape[2]
@@ -72,8 +75,8 @@ class MLEDimEstimator:
 
     def __call__(self, samples: torch.Tensor) -> torch.Tensor:
         """samples: (Ph, Pw, N, D)  →  dims: (Ph, Pw)"""
-        dists, _ = compute_mle(self._get_dists(samples), k=self.k, fixnan=self.fixnan)
-        return dists
+        dims, _ = compute_mle(self._get_dists(samples), k=self.k, fixnan=self.fixnan, unbiased=self.unbiased)
+        return dims
 
 
 # ---------------------------------------------------------------------------
@@ -91,14 +94,17 @@ class MLEAvgDimEstimator(MLEDimEstimator):
     kmin      : lower bound for k averaging (default 5)
     n_anchors : random query points per patch position (default 1000)
     fixnan    : mask NaN/Inf values in the log-ratio (default True)
+    unbiased  : apply bias correction factor to make the estimate unbiased (default True)
     """
 
-    def __init__(self, k: int = 10, kmin: int = 5, n_anchors: int = 1000, fixnan: bool = True):
-        super().__init__(k=k, n_anchors=n_anchors, fixnan=fixnan)
+    def __init__(self, k: int = 10, kmin: int = 5, n_anchors: int = 1000,
+                  fixnan: bool = True, unbiased : bool = True):
+        super().__init__(k=k, n_anchors=n_anchors, fixnan=fixnan, unbiased=unbiased)
         self.kmin = kmin
+        self.unbiased    = unbiased
 
     def __call__(self, samples: torch.Tensor) -> torch.Tensor:
         """samples: (Ph, Pw, N, D)  →  dims: (Ph, Pw)"""
         return compute_mle_averaged_over_k(
-            self._get_dists(samples), kmin=self.kmin, kmax=self.k, fixnan=self.fixnan
+            self._get_dists(samples), kmin=self.kmin, kmax=self.k, fixnan=self.fixnan, unbiased=self.unbiased
         )
