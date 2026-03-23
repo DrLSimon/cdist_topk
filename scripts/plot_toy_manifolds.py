@@ -12,7 +12,7 @@ from matplotlib.gridspec import GridSpecFromSubplotSpec
 
 
 from intrinsic_dim import get_estimator
-from intrinsic_dim.estimators.mle_variance import compute_mle_dims_variance, compute_mle_dims_sample_variance
+from intrinsic_dim.estimators.mle_variance import compute_mle_dims_sample_variance
 from intrinsic_dim.estimators.diagnostics import check_poisson_regime
 from intrinsic_dim.synthetic.sampling import sample_patches, list_manifolds, list_densities, get_max_dim
 
@@ -44,26 +44,29 @@ def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10, unbiased=True,
 
     samples = sample_patches(dims, patch_size=1, nb_channels=full_dim, n_samples=n_samples,
                               manifold=manifold, density=density)
-    pca_estimator          = get_estimator("pca", threshold=pca_threshold)
-    mle_estimator          = get_estimator("mle", k=k_mle, n_anchors=n_anchors, unbiased=unbiased)
-    mle_avg_estimator      = get_estimator("mle_avg", k=k_mle, n_anchors=n_anchors, unbiased=unbiased)
 
-    pca_dims               = pca_estimator(samples)
-    pca_dims_np            = pca_dims.cpu().numpy()
-    mle_dims               = mle_estimator(samples)
-    mle_dims_np            = mle_dims.cpu().numpy()
-    mle_avg_dims           = mle_avg_estimator(samples)
-    mle_avg_dims_np        = mle_avg_dims.cpu().numpy()
+    pca_estimator     = get_estimator("pca", threshold=pca_threshold)
+    mle_estimator     = get_estimator(
+        "mle", k=k_mle, n_anchors=n_anchors, unbiased=unbiased,
+        variance="bootstrap",
+        variance_kwargs=dict(n_subsample=n_subsample, n_trials=n_trials),
+    )
+    mle_avg_estimator = get_estimator("mle_avg", k=k_mle, n_anchors=n_anchors, unbiased=unbiased)
+
+    pca_dims        = pca_estimator(samples)
+    pca_dims_np     = pca_dims.cpu().numpy()
+    mle_dims        = mle_estimator(samples)
+    mle_dims_np     = mle_dims.cpu().numpy()
+    mle_avg_dims    = mle_avg_estimator(samples)
+    mle_avg_dims_np = mle_avg_dims.cpu().numpy()
 
     # ── extra debug data ──────────────────────────────────────────────────────
     # each entry: (data_np, title, is_bool)
     extra_panels = []
 
     if extra_debug_plot == "variance":
-        var_est = compute_mle_dims_variance(
-            samples, k=k_mle, n_anchors=n_anchors,
-            n_subsample=n_subsample, n_trials=n_trials, unbiased=unbiased)
-        var_ps = compute_mle_dims_sample_variance(
+        var_est = mle_estimator.variance_of(samples)
+        var_ps  = compute_mle_dims_sample_variance(
             samples, k=k_mle, n_anchors=n_anchors,
             n_subsample=n_subsample, n_trials=n_trials)
         extra_panels = [
@@ -84,10 +87,10 @@ def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10, unbiased=True,
                 else:
                     reason[j] = 3
         extra_panels = [
-            (is_valid.float().cpu().numpy(),   "Poisson valid",    True,  None),
-            (reason[np.newaxis, :].astype(float), "Failure reason", "reason", None),
-            (stats['r_ratio'].cpu().numpy(),   "r_k / r_1",        False, dims),
-            (stats['ks_pvalue'].cpu().numpy(), "KS p-value",       False, dims),
+            (is_valid.float().cpu().numpy(),      "Poisson valid",     True,     None),
+            (reason[np.newaxis, :].astype(float), "Failure reason",    "reason", None),
+            (stats['r_ratio'].cpu().numpy(),      "r_k / r_1",         False,    dims),
+            (stats['ks_pvalue'].cpu().numpy(),    "KS p-value",        False,    dims),
         ]
 
     # ── layout ────────────────────────────────────────────────────────────────
@@ -113,14 +116,14 @@ def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10, unbiased=True,
     })
     _plot_residuals(ax_res[0], target, pca_dims_np.flatten(),     "PCA residuals")
     _plot_residuals(ax_res[1], target, mle_dims_np.flatten(),     f"MLE residuals (k={k_mle})")
-    _plot_residuals(ax_res[2], target, mle_avg_dims_np.flatten(), f"MLE avg residuals (k=3..{k_mle})")
+    _plot_residuals(ax_res[2], target, mle_avg_dims_np.flatten(), f"MLE avg residuals (k=5..{k_mle})")
 
     # col 1: heatmaps stacked (target, PCA, MLE, MLE avg)
     heatmap_data = [
         (dims.cpu().numpy(),  "Target intrinsic dim",           dims),
         (pca_dims_np,         f"PCA ({pca_threshold:.0%} var)", dims),
         (mle_dims_np,         f"MLE dim (k={k_mle})",           dims),
-        (mle_avg_dims_np,     f"MLE avg dim (k=3..{k_mle})",    dims),
+        (mle_avg_dims_np,     f"MLE avg dim (k=5..{k_mle})",    dims),
     ]
     gs1 = GridSpecFromSubplotSpec(n_heatmap_rows, 1, subplot_spec=gs[1], hspace=0.6)
     for row, (data_np, title, dims_ref) in enumerate(heatmap_data):
@@ -129,7 +132,6 @@ def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10, unbiased=True,
         fig.add_subplot(gs1[row]).set_visible(False)
 
     # col 2: debug panels stacked (aligned with col 1 rows)
-    n_heatmap_rows = max(4, len(extra_panels))
     if has_debug:
         gs2 = GridSpecFromSubplotSpec(n_heatmap_rows, 1, subplot_spec=gs[2], hspace=0.6)
         for row, (data_np, title, kind, dims_ref) in enumerate(extra_panels):
@@ -157,7 +159,7 @@ def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10, unbiased=True,
 
     density_label = density or "default"
     debug_label   = f"__{extra_debug_plot}" if extra_debug_plot else ""
-    unbias_label   = "__biased" if not unbiased else ""
+    unbias_label  = "__biased" if not unbiased else ""
     fname = f"{manifold}__{density_label}__k{k_mle}{unbias_label}__fd{full_dim}{debug_label}.png"
     plt.savefig(fname, dpi=150, bbox_inches="tight")
     print(f"Saved to {fname}")
@@ -249,7 +251,8 @@ if __name__ == "__main__":
     parser.add_argument("--n_samples",        type=int,   default=25000)
     parser.add_argument("--n_anchors",        type=int,   default=1000)
     parser.add_argument("--k_mle",            type=int,   default=10)
-    parser.add_argument("--no-unbiased", dest="unbiased", action="store_false", help="Disable bias correction for MLE estimator")
+    parser.add_argument("--no-unbiased", dest="unbiased", action="store_false",
+                        help="Disable bias correction for MLE estimator")
     parser.add_argument("--pca_threshold",    type=float, default=0.999)
     parser.add_argument("--n_trials",         type=int,   default=10)
     parser.add_argument("--n_subsample",      type=int,   default=1000)
