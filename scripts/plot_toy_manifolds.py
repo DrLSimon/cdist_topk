@@ -51,7 +51,11 @@ def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10, unbiased=True,
         variance="bootstrap",
         variance_kwargs=dict(n_subsample=n_subsample, n_trials=n_trials),
     )
-    mle_avg_estimator = get_estimator("mle_avg", k=k_mle, n_anchors=n_anchors, unbiased=unbiased)
+    mle_avg_estimator = get_estimator(
+        "mle_avg", k=k_mle, n_anchors=n_anchors, unbiased=unbiased,
+        variance="bootstrap",
+        variance_kwargs=dict(n_subsample=n_subsample, n_trials=n_trials),
+    )
 
     pca_dims        = pca_estimator(samples)
     pca_dims_np     = pca_dims.cpu().numpy()
@@ -69,9 +73,11 @@ def plot_submanifold_test(full_dim=64, n_samples=25000, k_mle=10, unbiased=True,
         var_ps  = compute_mle_dims_sample_variance(
             samples, k=k_mle, n_anchors=n_anchors,
             n_subsample=n_subsample, n_trials=n_trials)
+        var_avg_est = mle_avg_estimator.variance_of(samples)
         extra_panels = [
-            (var_est.sqrt().cpu().numpy(), f"STD MLE (estimator, k={k_mle})", False, dims),
-            (var_ps.sqrt().cpu().numpy(),  f"STD MLE (per sample, k={k_mle})", False, dims),
+            (var_est.sqrt().cpu().numpy(),     f"STD MLE (k={k_mle})",         False, dims),
+            (var_avg_est.sqrt().cpu().numpy(), f"STD MLE avg (k=5..{k_mle})",  False, dims),
+            (var_ps.sqrt().cpu().numpy(),      f"STD MLE (per sample, k={k_mle})", False, dims),
         ]
 
     elif extra_debug_plot == "poisson_validity":
